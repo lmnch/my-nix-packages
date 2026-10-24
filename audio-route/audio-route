@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pactl localizes labels such as "Sink" and "Name". The parsers below rely on
+# their stable English forms, so make the machine-readable input deterministic.
+export LC_ALL=C
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  audio-route
+  audio-route pick
+  audio-route list
+
+Examples:
+  audio-route
+  audio-route list
+
+The picker lists every active playback stream by application and media name.
+Select one or more streams with Tab, confirm with Enter, and then select one
+output sink. Esc cancels without changing anything.
+EOF
+}
+
+all_sinks() {
+  pactl list sinks | awk '
+    function emit() {
+      if (serial != "") print serial "\t" node "\t" description "\t" name
+    }
+    /^Sink #[0-9]+/ {
+      emit()
+      serial=$0; sub(/^.*#/, "", serial)
+      node=""; name=""; description=""
+    }
+    /^[[:space:]]*Name: / {
+      name=$0; sub(/^[[:space:]]*Name: /, "", name)
+    }
+    /^[[:space:]]*Description: / {
+      description=$0; sub(/^[[:space:]]*Description: /, "", description)
+    }
+    /^[[:space:]]*object.id = "[0-9]+"/ {
+      node=$0; sub(/^.*= "/, "", node); sub(/".*$/, "", node)
+    }
+    END { emit() }
+  '
+}
+
+all_streams() {
+  pactl list sink-inputs | awk '
+    function emit() {
+      if (serial != "") print serial "\t" node "\t" app "\t" name
+    }
+    /^Sink Input #[0-9]+/ {
+      emit()
+      serial=$0; sub(/^.*#/, "", serial)
+      node=""; app="(unknown application)"; name="(unnamed stream)"
+    }
+    /^[[:space:]]*object.id = "[0-9]+"/ {
+      node=$0; sub(/^.*= "/, "", node); sub(/".*$/, "", node)
+    }
+    /application.name = "/ {
+      app=$0; sub(/^.*= "/, "", app); sub(/".*$/, "", app)
+    }
+    /media.name = "/ {
+      name=$0; sub(/^.*= "/, "", name); sub(/".*$/, "", name)
+    }
+    END { emit() }
+  '
+}
+
+list_audio() {
+  printf 'Outputs:\n'
+  all_sinks | awk -F '\t' '{ printf "  %-5s node=%-5s %-30s %s\n", $1, $2, $3, $4 }'
+  printf '\nPlayback streams:\n'
+  all_streams | awk -F '\t' '{ printf "  %-5s node=%-5s %-20s %s\n", $1, $2, $3, $4 }'
+}
+
+port_property() {
+  local port_id=$1 property=$2
+  pw-cli info "$port_id" 2>/dev/null | awk -v key="$property" '
+    index($0, key " = \"") {
+      split($0, fields, "\"")
+      print fields[2]
+      exit
+    }
+  '
+}
+
+ports_for_node() {
+  local direction=$1 node_id=$2 listing port_id port_node channel group
+  if [[ $direction == output ]]; then
+    listing=$(pw-link -o -I)
+  else
+    listing=$(pw-link -i -I)
+  fi
+
+  while read -r port_id _; do
+    [[ $port_id =~ ^[0-9]+$ ]] || continue
+    port_node=$(port_property "$port_id" 'node.id')
+    [[ $port_node == "$node_id" ]] || continue
+    channel=$(port_property "$port_id" 'audio.channel')
+    group=$(port_property "$port_id" 'port.group')
+    if [[ $direction == output || $group == playback ]]; then
+      printf '%s\t%s\n' "$channel" "$port_id"
+    fi
+  done <<< "$listing"
+}
+
+all_playback_ports() {
+  local listing port_id group
+  listing=$(pw-link -i -I)
+  while read -r port_id _; do
+    [[ $port_id =~ ^[0-9]+$ ]] || continue
+    group=$(port_property "$port_id" 'port.group')
+    [[ $group == playback ]] && printf '%s\n' "$port_id"
+  done <<< "$listing"
+}
+
+rewire_stream() {
+  local stream_node=$1 sink_node=$2
+  local stream_ports sink_ports channel out_port in_port playback_port
+  stream_ports=$(ports_for_node output "$stream_node")
+  sink_ports=$(ports_for_node input "$sink_node")
+  [[ -n $stream_ports ]] || die "no output ports found for stream node $stream_node"
+  [[ -n $sink_ports ]] || die "no playback ports found for sink node $sink_node"
+
+  while IFS=$'\t' read -r channel out_port; do
+    [[ -n $out_port ]] || continue
+    while read -r playback_port; do
+      pw-link -d "$out_port" "$playback_port" >/dev/null 2>&1 || true
+    done < <(all_playback_ports)
+
+    in_port=$(awk -F '\t' -v ch="$channel" '$1 == ch { print $2; exit }' <<< "$sink_ports")
+    [[ -n $in_port ]] || die "sink has no $channel channel"
+    pw-link -w "$out_port" "$in_port"
+  done <<< "$stream_ports"
+}
+
+route_selected() {
+  local streams=$1 sink=$2
+  local serial sink_node sink_description sink_name
+  local stream_serial stream_node stream_app stream_name
+  IFS=$'\t' read -r serial sink_node sink_description sink_name <<< "$sink"
+  [[ -n $sink_node ]] || die "could not determine PipeWire node for $sink_description"
+
+  printf 'Target: %s\n' "$sink_description"
+  while IFS=$'\t' read -r stream_serial stream_node stream_app stream_name; do
+    [[ -n $stream_serial ]] || continue
+    printf 'Routing: %s — %s\n' "$stream_app" "$stream_name"
+    if pactl move-sink-input "$stream_serial" "$serial" >/dev/null 2>&1; then
+      printf '  moved normally\n'
+    else
+      [[ -n $stream_node ]] || die "could not determine node for stream $stream_serial"
+      rewire_stream "$stream_node" "$sink_node"
+      printf '  rewired directly (browser had pinned the device)\n'
+    fi
+  done <<< "$streams"
+}
+
+pick_audio() {
+  local streams sinks selected_streams selected_sink
+  need fzf
+
+  streams=$(all_streams)
+  [[ -n $streams ]] || die 'no active playback streams found'
+  selected_streams=$(fzf --multi --delimiter=$'\t' --with-nth=3,4 \
+    --prompt='Streams (Tab selects multiple)> ' \
+    --header='Select one or more streams with Tab, then press Enter' \
+    <<< "$streams") || return 0
+  [[ -n $selected_streams ]] || return 0
+
+  sinks=$(all_sinks)
+  [[ -n $sinks ]] || die 'no output sinks found'
+  selected_sink=$(fzf --no-multi --delimiter=$'\t' --with-nth=3,4 \
+    --prompt='Output> ' --header='Select one output sink' \
+    <<< "$sinks") || return 0
+  [[ -n $selected_sink ]] || return 0
+
+  route_selected "$selected_streams" "$selected_sink"
+}
+
+need pactl
+need pw-cli
+need pw-link
+
+case ${1:-pick} in
+  pick|route)
+    [[ $# -le 1 ]] || { usage >&2; exit 2; }
+    pick_audio
+    ;;
+  list)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    list_audio
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
