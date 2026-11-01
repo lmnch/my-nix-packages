@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="${1:-${REPO_ROOT:-$HOME}}"
+repo_depth="${REPO_DEPTH:-1}"
+
+if [[ ! -d "$repo_root" ]]; then
+  printf 'repo-develop: repository root does not exist: %s\n' "$repo_root" >&2
+  exit 1
+fi
+
+if [[ ! "$repo_depth" =~ ^[0-9]+$ ]]; then
+  printf 'repo-develop: REPO_DEPTH must be a non-negative integer: %s\n' "$repo_depth" >&2
+  exit 1
+fi
+
+repo=$(
+  find "$repo_root" \
+    -mindepth 2 \
+    -maxdepth "$((repo_depth + 1))" \
+    -type d -name .git -prune -printf '%h\n' 2>/dev/null |
+    sort |
+    fzf --prompt='Repository> ' \
+      --height=60% \
+      --layout=reverse \
+      --border \
+      --preview='git -C {} status --short --branch 2>/dev/null'
+) || exit 0
+
+[[ -n "$repo" ]] || exit 0
+
+# Pass the path as a positional parameter so spaces and shell metacharacters in
+# repository names remain safe.
+shell_command='cd -- "$1" && exec nix develop'
+
+if [[ -n "${TERMINAL:-}" ]]; then
+  # TERMINAL may contain flags, for example "kitty --single-instance".
+  read -r -a terminal_command <<< "$TERMINAL"
+  exec "${terminal_command[@]}" bash -lc "$shell_command" bash "$repo"
+elif command -v kitty >/dev/null 2>&1; then
+  exec kitty bash -lc "$shell_command" bash "$repo"
+elif command -v foot >/dev/null 2>&1; then
+  exec foot bash -lc "$shell_command" bash "$repo"
+elif command -v wezterm >/dev/null 2>&1; then
+  exec wezterm start -- bash -lc "$shell_command" bash "$repo"
+elif command -v alacritty >/dev/null 2>&1; then
+  exec alacritty -e bash -lc "$shell_command" bash "$repo"
+elif command -v gnome-terminal >/dev/null 2>&1; then
+  exec gnome-terminal -- bash -lc "$shell_command" bash "$repo"
+elif command -v konsole >/dev/null 2>&1; then
+  exec konsole -e bash -lc "$shell_command" bash "$repo"
+elif command -v xterm >/dev/null 2>&1; then
+  exec xterm -e bash -lc "$shell_command" bash "$repo"
+else
+  printf '%s\n' 'repo-develop: no supported terminal found; set TERMINAL to one' >&2
+  exit 1
+fi
