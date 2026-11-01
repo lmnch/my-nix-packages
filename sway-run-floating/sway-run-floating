@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if (( $# == 0 )); then
+  printf '%s\n' 'usage: sway-run-floating COMMAND [ARGUMENT ...]' >&2
+  exit 2
+fi
+
+if [[ -z "${SWAYSOCK:-}" ]]; then
+  printf '%s\n' 'sway-run-floating: SWAYSOCK is not set; are you running Sway?' >&2
+  exit 1
+fi
+
+# A unique app ID prevents this rule from affecting later Alacritty windows.
+app_id="sway-run-floating-$$"
+swaymsg "for_window [app_id=\"$app_id\"] floating enable" >/dev/null
+
+exec alacritty --class "$app_id" -e "$@"
