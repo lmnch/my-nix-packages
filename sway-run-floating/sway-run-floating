@@ -16,4 +16,24 @@ fi
 app_id="sway-run-floating-$$"
 swaymsg "for_window [app_id=\"$app_id\"] floating enable" >/dev/null
 
-exec alacritty --class "$app_id" -e "$@"
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
+status_file=$(mktemp "$runtime_dir/sway-run-floating-status.XXXXXX")
+output_file=$(mktemp "$runtime_dir/sway-run-floating-output.XXXXXX")
+trap 'rm -f "$status_file" "$output_file"' EXIT
+
+set +e
+alacritty --class "$app_id" -e \
+  sway-run-floating-command "$status_file" "$output_file" "$@"
+terminal_status=$?
+set -e
+
+if read -r command_status < "$status_file" &&
+   [[ "$command_status" =~ ^[0-9]+$ ]] &&
+   (( command_status <= 255 )); then
+  cat "$output_file"
+  exit "$command_status"
+fi
+
+# If Alacritty failed before the command could report its status, preserve
+# Alacritty's failure status instead.
+exit "$terminal_status"

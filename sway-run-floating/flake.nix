@@ -23,13 +23,18 @@
               runHook preInstall
 
               install -Dm755 ${./sway-run-floating} $out/bin/sway-run-floating
+              install -Dm755 ${./sway-run-floating-command} $out/bin/sway-run-floating-command
               substituteInPlace $out/bin/sway-run-floating \
+                --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
+              substituteInPlace $out/bin/sway-run-floating-command \
                 --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
               wrapProgram $out/bin/sway-run-floating \
                 --prefix PATH : ${pkgs.lib.makeBinPath [
                   pkgs.alacritty
+                  pkgs.coreutils
                   pkgs.sway
-                ]}
+                ]} \
+                --prefix PATH : $out/bin
 
               runHook postInstall
             '';

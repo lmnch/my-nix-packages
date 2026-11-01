@@ -17,4 +17,14 @@ sway-run-floating htop
 ```
 
 The command must be run from inside a Sway session. Its arguments are passed
-directly to Alacritty without shell evaluation.
+directly to Alacritty without shell evaluation. The launcher waits for the
+window to close and exits with the command's exit status, including cancellation
+statuses returned by interactive tools such as `fzf`. It also emits the
+command's standard output, so a selected value can be captured normally:
+
+```console
+selected_file=$(sway-run-floating fzf)
+```
+
+Standard error stays attached to the floating terminal so interactive programs
+can render their interface and diagnostics there.
