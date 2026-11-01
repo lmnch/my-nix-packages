@@ -1,5 +1,5 @@
 {
-  description = "Fuzzy repository picker that opens a Nix development shell";
+  description = "Fuzzy repository picker that enters a Nix development shell";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -38,7 +38,7 @@
             '';
 
             meta = {
-              description = "Select a Git repository and open nix develop in a new terminal";
+              description = "Select a Git repository and run nix develop in the current terminal";
               license = pkgs.lib.licenses.mit;
               mainProgram = "repo-develop";
               platforms = pkgs.lib.platforms.linux;

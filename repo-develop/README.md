@@ -1,7 +1,7 @@
 # repo-develop
 
-Fuzzily select a Git repository, open it in a new terminal, and run
-`nix develop` there.
+Fuzzily select a Git repository and run `nix develop` there in the current
+terminal.
 
 By default, repositories are discovered directly below `~`. Set `REPO_ROOT`
 to search elsewhere and `REPO_DEPTH` to search more deeply. A root passed as
@@ -15,13 +15,6 @@ REPO_DEPTH=3 nix run path:./repo-develop
 
 `REPO_DEPTH` defaults to `1`, meaning only repositories immediately inside the
 root are included.
-
-The script detects Kitty, Foot, WezTerm, Alacritty, GNOME Terminal, Konsole,
-and XTerm. Set `TERMINAL` to override the detection:
-
-```console
-TERMINAL="kitty --single-instance" nix run path:./repo-develop
-```
 
 Install it into your user profile with:
 
